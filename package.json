@@ -1,0 +1,11 @@
+{
+  "name": "rubinot-monitor",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "puppeteer-real-browser": "^1.3.5"
+  }
+}
