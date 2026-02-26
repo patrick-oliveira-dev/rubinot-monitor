@@ -141,7 +141,7 @@ async function getLevel(page, name) {
   const level = await page.evaluate(() => {
     const cells = document.querySelectorAll("td");
     for (const cell of cells) {
-      if (cell.textContent.trim().includes("Nível")) {
+      if (cell.textContent.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "") === "Nivel:") {
         const next = cell.nextElementSibling;
         if (next) return parseInt(next.textContent.trim());
       }
