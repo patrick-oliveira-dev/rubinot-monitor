@@ -4,8 +4,7 @@ import { readFileSync, writeFileSync } from "fs";
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const GUILD_URL = "https://rubinot.com.br/guilds/TRILOKO";
 const LEVELS_FILE = "./levels.json";
-const INTERVAL_MS = 5 * 60 * 1000;        // 5 minutos
-const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 horas
+const INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
 
 // ── Persistência ─────────────────────────────────────────────────────────────
 
@@ -55,22 +54,21 @@ async function createBrowser() {
   });
 }
 
-// ── Guild sync ────────────────────────────────────────────────────────────────
+// ── Guild ─────────────────────────────────────────────────────────────────────
 
-async function syncGuildMembers(page, levels) {
-  console.log(`  Sincronizando membros da guild...`);
-
+async function getGuildMembers(page) {
   await page.goto(GUILD_URL, { waitUntil: "networkidle2", timeout: 30000 });
   await page.waitForFunction(
     () => !document.title.includes("Just a moment"),
     { timeout: 20000 }
   );
 
-  const membersFromGuild = await page.evaluate(() => {
+  return await page.evaluate(() => {
     const rows = document.querySelectorAll("table tr");
     const members = {};
     for (const row of rows) {
       const cells = row.querySelectorAll("td");
+      // colunas: Rank | Name and Title | Vocation | Level | Joining Date | Status
       if (cells.length >= 4) {
         const name = cells[1]?.textContent?.trim();
         const level = parseInt(cells[3]?.textContent?.trim());
@@ -81,122 +79,59 @@ async function syncGuildMembers(page, levels) {
     }
     return members;
   });
-
-  const currentNames = Object.keys(levels);
-  const guildNames = Object.keys(membersFromGuild);
-
-  // Adiciona novos membros
-  const added = [];
-  for (const name of guildNames) {
-    if (!(name in levels)) {
-      levels[name] = membersFromGuild[name];
-      added.push(name);
-    }
-  }
-
-  // Remove quem saiu da guild
-  const removed = [];
-  for (const name of currentNames) {
-    if (!guildNames.includes(name)) {
-      delete levels[name];
-      removed.push(name);
-    }
-  }
-
-  if (added.length > 0) {
-    console.log(`  ✅ Novos membros: ${added.join(", ")}`);
-    await sendDiscordEmbed(
-      "👋 Novo(s) membro(s) na guild!",
-      added.map((n) => `**${n}** (level ${membersFromGuild[n]})`).join("\n"),
-      3447003 // azul
-    );
-  }
-
-  if (removed.length > 0) {
-    console.log(`  🚪 Removidos: ${removed.join(", ")}`);
-    await sendDiscordEmbed(
-      "🚪 Membro(s) saíram da guild",
-      removed.map((n) => `**${n}**`).join("\n"),
-      10197915 // cinza
-    );
-  }
-
-  if (added.length === 0 && removed.length === 0) {
-    console.log(`  Lista de membros sem alterações.`);
-  }
-
-  return levels;
-}
-
-// ── Scraping de level ─────────────────────────────────────────────────────────
-
-async function getLevel(page, name) {
-  const url = `https://rubinot.com.br/characters?name=${encodeURIComponent(name)}`;
-  await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-  await page.waitForFunction(
-    () => !document.title.includes("Just a moment"),
-    { timeout: 20000 }
-  );
-
-  const level = await page.evaluate(() => {
-    const cells = document.querySelectorAll("td");
-    for (const cell of cells) {
-      if (cell.textContent.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "") === "Nivel:") {
-        const next = cell.nextElementSibling;
-        if (next) return parseInt(next.textContent.trim());
-      }
-    }
-    return null;
-  });
-
-  if (level === null) throw new Error(`Level não encontrado para ${name}`);
-  return level;
 }
 
 // ── Monitor ───────────────────────────────────────────────────────────────────
 
-async function monitor(isSync) {
+async function monitor() {
   console.log(`\n[${new Date().toISOString()}] Iniciando verificação...`);
 
-  let levels = loadLevels();
+  const levels = loadLevels();
   let browser, page;
 
   try {
     ({ browser, page } = await createBrowser());
 
-    // Sincroniza membros 1x por dia (ou na primeira execução se levels vazio)
-    if (isSync || Object.keys(levels).length === 0) {
-      levels = await syncGuildMembers(page, levels);
-      saveLevels(levels);
-    }
+    const current = await getGuildMembers(page);
 
-    // Verifica level de cada membro
-    for (const character of Object.keys(levels)) {
-      try {
-        const current = await getLevel(page, character);
-        const old = levels[character];
+    // Verifica level up e mortes
+    for (const [name, currentLevel] of Object.entries(current)) {
+      const old = levels[name] ?? null;
 
-        console.log(`  ${character} → ${current} (anterior: ${old})`);
+      console.log(`  ${name} → ${currentLevel}${old !== null ? ` (anterior: ${old})` : " (primeiro registro)"}`);
 
-        if (current > old) {
-          await sendDiscordEmbed(
-            "🎉 LEVEL UP!",
-            `**${character}** evoluiu de **${old}** para **${current}**!`,
-            5763719 // verde
-          );
-          levels[character] = current;
-        } else if (current < old) {
-          await sendDiscordEmbed(
-            "💀 MORTE DETECTADA",
-            `Que noob... **${character}** morreu e voltou para o level **${current}**!`,
-            15548997 // vermelho
-          );
-          levels[character] = current;
-        }
-      } catch (err) {
-        console.error(`  ❌ Erro em ${character}: ${err.message}`);
+      if (old === null) {
+        levels[name] = currentLevel;
+      } else if (currentLevel > old) {
+        await sendDiscordEmbed(
+          "🎉 LEVEL UP!",
+          `**${name}** evoluiu de **${old}** para **${currentLevel}**!`,
+          5763719 // verde
+        );
+        levels[name] = currentLevel;
+      } else if (currentLevel < old) {
+        await sendDiscordEmbed(
+          "💀 MORTE DETECTADA",
+          `Que noob... **${name}** morreu e voltou para o level **${currentLevel}**!`,
+          15548997 // vermelho
+        );
+        levels[name] = currentLevel;
       }
     }
+
+    // Remove quem saiu da guild
+    for (const name of Object.keys(levels)) {
+      if (!(name in current)) {
+        console.log(`  🚪 ${name} saiu da guild`);
+        await sendDiscordEmbed(
+          "🚪 Membro saiu da guild",
+          `**${name}** não está mais no TRILOKO.`,
+          10197915 // cinza
+        );
+        delete levels[name];
+      }
+    }
+
   } finally {
     if (browser) await browser.close();
   }
@@ -213,14 +148,8 @@ if (!WEBHOOK_URL) {
 }
 
 async function run() {
-  // Primeira execução sempre faz sync
-  await monitor(true);
-
-  // A cada 5 min verifica levels, sem sync
-  setInterval(() => monitor(false), INTERVAL_MS);
-
-  // A cada 24h faz sync da guild
-  setInterval(() => monitor(true), SYNC_INTERVAL_MS);
+  await monitor();
+  setInterval(monitor, INTERVAL_MS);
 }
 
 run().catch(console.error);
