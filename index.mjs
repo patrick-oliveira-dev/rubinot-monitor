@@ -57,18 +57,20 @@ async function createBrowser() {
 // ── Guild ─────────────────────────────────────────────────────────────────────
 
 async function getGuildMembers(page) {
-  await page.goto(GUILD_URL, { waitUntil: "networkidle2", timeout: 30000 });
+  await page.goto(GUILD_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForFunction(
     () => !document.title.includes("Just a moment"),
     { timeout: 20000 }
   );
+
+  // Espera a tabela existir antes de ler
+  await page.waitForSelector("table tr", { timeout: 15000 });
 
   return await page.evaluate(() => {
     const rows = document.querySelectorAll("table tr");
     const members = {};
     for (const row of rows) {
       const cells = row.querySelectorAll("td");
-      // colunas: Rank | Name and Title | Vocation | Level | Joining Date | Status
       if (cells.length >= 4) {
         const name = cells[1]?.textContent?.trim();
         const level = parseInt(cells[3]?.textContent?.trim());
@@ -119,16 +121,18 @@ async function monitor() {
       }
     }
 
-    // Remove quem saiu da guild
-    for (const name of Object.keys(levels)) {
-      if (!(name in current)) {
-        console.log(`  🚪 ${name} saiu da guild`);
-        await sendDiscordEmbed(
-          "🚪 Membro saiu da guild",
-          `**${name}** não está mais no TRILOKO.`,
-          10197915 // cinza
-        );
-        delete levels[name];
+    // Só remove se a guild retornou membros (evita falso positivo por erro)
+    if (Object.keys(current).length > 0) {
+      for (const name of Object.keys(levels)) {
+        if (!(name in current)) {
+          console.log(`  🚪 ${name} saiu da guild`);
+          await sendDiscordEmbed(
+            "🚪 Membro saiu da guild",
+            `**${name}** não está mais no TRILOKO.`,
+            10197915 // cinza
+          );
+          delete levels[name];
+        }
       }
     }
 
